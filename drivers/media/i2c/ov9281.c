@@ -40,6 +40,9 @@
 #define CHIP_ID				0x9281
 #define OV9281_REG_CHIP_ID		0x300a
 
+#define OV9281_REG_TIMING_FORMAT_1		0x3820
+#define OV9281_REG_TIMING_FORMAT_2		0x3821
+
 #define OV9281_REG_CTRL_MODE		0x0100
 #define OV9281_MODE_SW_STANDBY		0x0
 #define OV9281_MODE_STREAMING		BIT(0)
@@ -123,6 +126,8 @@ struct ov9281 {
 	struct v4l2_ctrl	*digi_gain;
 	struct v4l2_ctrl	*hblank;
 	struct v4l2_ctrl	*vblank;
+	struct v4l2_ctrl	*hflip;
+	struct v4l2_ctrl	*vflip;
 	struct v4l2_ctrl	*pixel_rate;
 	struct v4l2_ctrl	*test_pattern;
 	struct mutex		mutex;
@@ -613,6 +618,34 @@ static int ov9281_enable_test_pattern(struct ov9281 *ov9281, u32 pattern)
 				OV9281_REG_VALUE_08BIT, val);
 }
 
+static int ov9281_set_ctrl_hflip(struct ov9281 *ov9281, int value)
+{
+	u32 current_val;
+	int ret = ov9281_read_reg(ov9281->client, OV9281_REG_TIMING_FORMAT_2,
+			      OV9281_REG_VALUE_08BIT, &current_val);
+	if (!ret)
+	{
+		current_val ^= (-value ^ current_val) & (1 << 2);		
+		return ov9281_write_reg(ov9281->client, OV9281_REG_TIMING_FORMAT_2,
+							OV9281_REG_VALUE_08BIT, current_val);
+	}
+	return ret;
+}
+
+static int ov9281_set_ctrl_vflip(struct ov9281 *ov9281, int value)
+{
+	u32 current_val;
+	int ret = ov9281_read_reg(ov9281->client, OV9281_REG_TIMING_FORMAT_1,
+			      OV9281_REG_VALUE_08BIT, &current_val);
+	if (!ret)
+	{
+		current_val ^= (-value ^ current_val) & (1 << 2);
+		return ov9281_write_reg(ov9281->client, OV9281_REG_TIMING_FORMAT_1,
+							OV9281_REG_VALUE_08BIT, current_val);
+	}
+	return ret;
+}
+
 static const struct v4l2_rect *
 __ov9281_get_pad_crop(struct ov9281 *ov9281, struct v4l2_subdev_pad_config *cfg,
 		      unsigned int pad, enum v4l2_subdev_format_whence which)
@@ -931,6 +964,12 @@ static int ov9281_set_ctrl(struct v4l2_ctrl *ctrl)
 		return 0;
 
 	switch (ctrl->id) {
+	case V4L2_CID_HFLIP:		
+		ret = ov9281_set_ctrl_hflip(ov9281, ctrl->val);
+		break;
+	case V4L2_CID_VFLIP:
+		ret = ov9281_set_ctrl_vflip(ov9281, ctrl->val);
+		break;
 	case V4L2_CID_EXPOSURE:
 		/* 4 least significant bits of expsoure are fractional part */
 		ret = ov9281_write_reg(ov9281->client, OV9281_REG_EXPOSURE,
@@ -979,7 +1018,7 @@ static int ov9281_initialize_controls(struct ov9281 *ov9281)
 
 	handler = &ov9281->ctrl_handler;
 	mode = ov9281->cur_mode;
-	ret = v4l2_ctrl_handler_init(handler, 8);
+	ret = v4l2_ctrl_handler_init(handler, 10);
 	if (ret)
 		return ret;
 	handler->lock = &ov9281->mutex;
@@ -1019,9 +1058,16 @@ static int ov9281_initialize_controls(struct ov9281 *ov9281)
 					      OV9281_GAIN_MIN, OV9281_GAIN_MAX,
 					      OV9281_GAIN_STEP,
 					      OV9281_GAIN_DEFAULT);
+						  
+	ov9281->vflip = v4l2_ctrl_new_std(handler, &ov9281_ctrl_ops, 
+						V4L2_CID_VFLIP, 
+						0, 1, 1, 0);
+			  
+	ov9281->hflip = v4l2_ctrl_new_std(handler, &ov9281_ctrl_ops,
+						V4L2_CID_HFLIP,
+						0, 1, 1, 0);
 
-	ov9281->test_pattern =
-		v4l2_ctrl_new_std_menu_items(handler, &ov9281_ctrl_ops,
+	ov9281->test_pattern = v4l2_ctrl_new_std_menu_items(handler, &ov9281_ctrl_ops,
 					     V4L2_CID_TEST_PATTERN,
 					     ARRAY_SIZE(ov9281_test_pattern_menu) - 1,
 					     0, 0, ov9281_test_pattern_menu);
